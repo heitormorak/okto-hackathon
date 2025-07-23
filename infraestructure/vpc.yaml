@@ -1,0 +1,62 @@
+cat > infrastructure/vpc.yaml << 'EOF'
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'VPC e Segurança para IA de Especificação OKTO'
+
+Resources:
+  # VPC Principal
+  MainVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: okto-specs-vpc
+        - Key: Project
+          Value: hackathon-2025
+
+  # Subnets Privadas
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MainVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: okto-specs-private-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MainVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: okto-specs-private-2
+
+  # Security Group para Lambda
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group para Lambda functions
+      VpcId: !Ref MainVPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+Outputs:
+  VPCId:
+    Description: ID da VPC
+    Value: !Ref MainVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC-ID"
+  
+  PrivateSubnet1Id:
+    Description: ID da Private Subnet 1
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnet1-ID"
+EOF
