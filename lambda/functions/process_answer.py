@@ -6,11 +6,27 @@ from bedrock_client import BedrockClient
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# Headers CORS padrão
+CORS_HEADERS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    'Content-Type': 'application/json'
+}
+
 def lambda_handler(event, context):
     """
     Lambda para processar resposta e gerar próxima pergunta
     """
     try:
+        # Tratar requisições OPTIONS (preflight)
+        if event.get('httpMethod') == 'OPTIONS':
+            return {
+                'statusCode': 200,
+                'headers': CORS_HEADERS,
+                'body': json.dumps({'message': 'OK'})
+            }
+        
         # Parse flexível do request
         logger.info(f"Event recebido: {json.dumps(event)}")
         
@@ -61,6 +77,56 @@ def lambda_handler(event, context):
         if len(answer) < 5:
             logger.error(f"answer muito curto: {len(answer)} caracteres")
             return create_error_response('A resposta deve ter pelo menos 5 caracteres')
+        
+        # CORREÇÃO: Detectar respostas que indicam repetição
+        if any(phrase in answer.lower() for phrase in ['já fez essa pergunta', 'vc já fez', 'você já perguntou', 'pergunta repetida']):
+            logger.info("Usuário indicou pergunta repetitiva, finalizando especificação")
+            # Finalizar especificação quando usuário reclama de repetição
+            spec_data = {
+                'spec_id': spec_id,
+                'title': title,
+                'initial_idea': initial_idea,
+                'questions_answers': previous_answers,
+                'completed_at': datetime.now(timezone.utc).isoformat()
+            }
+            
+            try:
+                bedrock_client = BedrockClient()
+                
+                # Identificar stakeholders
+                logger.info("Identificando stakeholders...")
+                stakeholders_result = bedrock_client.identify_stakeholders(spec_data)
+                stakeholders = stakeholders_result.get('stakeholders', [])
+                logger.info(f"Stakeholders identificados: {len(stakeholders)}")
+                
+                # Gerar documento final
+                logger.info("Gerando documento final...")
+                final_document = bedrock_client.generate_final_document(spec_data)
+                logger.info("Documento gerado com sucesso")
+                
+                return {
+                    'statusCode': 200,
+                    'headers': CORS_HEADERS,
+                    'body': json.dumps({
+                        'spec_id': spec_id,
+                        'status': 'completed',
+                        'stakeholders': stakeholders,
+                        'final_document': final_document,
+                        'total_questions': len(previous_answers),
+                        'all_answers': previous_answers,
+                        'completed_at': spec_data['completed_at'],
+                        'summary': {
+                            'title': title,
+                            'idea': initial_idea,
+                            'stakeholder_count': len(stakeholders),
+                            'questions_count': len(previous_answers)
+                        }
+                    }, ensure_ascii=False)
+                }
+                
+            except Exception as e:
+                logger.error(f"Erro ao finalizar especificação após repetição: {str(e)}")
+                return create_error_response(f'Erro ao finalizar especificação: {str(e)}')
         
         # Adicionar resposta atual ao histórico
         updated_answers = previous_answers.copy()
@@ -119,11 +185,7 @@ def lambda_handler(event, context):
                 
                 return {
                     'statusCode': 200,
-                    'headers': {
-                        'Access-Control-Allow-Origin': '*',
-                        'Access-Control-Allow-Headers': 'Content-Type',
-                        'Content-Type': 'application/json'
-                    },
+                    'headers': CORS_HEADERS,
                     'body': json.dumps({
                         'spec_id': spec_id,
                         'status': 'completed',
@@ -148,19 +210,15 @@ def lambda_handler(event, context):
             # Continuar com próxima pergunta
             question_number = len(updated_answers) + 1
             
-            # Estimar progresso (geralmente leva 4-7 perguntas)
-            estimated_total = 6
-            progress_percentage = min(int((len(updated_answers) / estimated_total) * 100), 90)
+            # CORREÇÃO: Cálculo correto do progresso
+            estimated_total = max(5, len(updated_answers) + 1)  # Sempre pelo menos 5, mas pode ajustar se passou
+            progress_percentage = min(int((len(updated_answers) / estimated_total) * 100), 95)
             
             logger.info(f"Especificação {spec_id} - Pergunta {question_number}: {next_question}")
             
             return {
                 'statusCode': 200,
-                'headers': {
-                    'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'Content-Type',
-                    'Content-Type': 'application/json'
-                },
+                'headers': CORS_HEADERS,
                 'body': json.dumps({
                     'spec_id': spec_id,
                     'status': 'in_progress',
@@ -184,11 +242,7 @@ def create_error_response(message):
     """Função helper para criar respostas de erro padronizadas"""
     return {
         'statusCode': 400,
-        'headers': {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Content-Type',
-            'Content-Type': 'application/json'
-        },
+        'headers': CORS_HEADERS,
         'body': json.dumps({
             'error': message
         }, ensure_ascii=False)
@@ -200,11 +254,11 @@ if __name__ == "__main__":
     test_event = {
         'body': json.dumps({
             'spec_id': 'test-123',
-            'current_question': 'Quais tipos de PIX devem ser suportados (CPF, CNPJ, chave, QR Code) e há limites de valor?',
-            'answer': 'Deve suportar todos os tipos: CPF, CNPJ, chave PIX e QR Code. Limite de R$ 50.000 por transação, funcionando 24/7 incluindo finais de semana',
+            'current_question': 'Como esta feature beneficia as casas de apostas (nossos clientes)?',
+            'answer': 'Aumenta a segurança e confiança dos usuários nas casas de apostas, reduzindo fraudes e melhorando a experiência de login',
             'previous_answers': {},
-            'initial_idea': 'Implementar PIX agendado para nossos clientes poderem programar pagamentos futuros',
-            'title': 'PIX Agendado'
+            'initial_idea': 'Implementar reconhecimento facial no login para aumentar segurança',
+            'title': 'Reconhecimento Facial'
         })
     }
     
